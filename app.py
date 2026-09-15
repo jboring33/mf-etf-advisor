@@ -2,7 +2,6 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Multi-Timeframe ETF Engine", layout="wide")
 
@@ -27,7 +26,6 @@ def fetch_macro_data():
         # VIX Calculations
         vix_current = float(macro_df["^VIX"].iloc[-1])
         vix_prev = float(macro_df["^VIX"].iloc[-2])
-        vix_50ma = float(macro_df["^VIX"].rolling(50).mean().iloc[-1])
         vix_chg_pct = ((vix_current - vix_prev) / vix_prev) * 100
         
         # 10-Year Yield (^TNX) Calculations
@@ -38,9 +36,7 @@ def fetch_macro_data():
         
         return {
             "vix": vix_current,
-            "vix_50ma": vix_50ma,
             "vix_chg_str": f"{vix_chg_pct:+.2f}% vs Yesterday",
-            "vix_elevated": vix_current > vix_50ma,
             "tnx": tnx_current,
             "tnx_50ma": tnx_50ma,
             "tnx_chg_str": f"{tnx_chg_bps:+.1f} bps Today",
@@ -48,33 +44,41 @@ def fetch_macro_data():
         }
     except Exception:
         return {
-            "vix": 18.0, "vix_50ma": 16.0, "vix_chg_str": "+0.00%", "vix_elevated": True,
+            "vix": 18.0, "vix_chg_str": "+0.00%",
             "tnx": 4.99, "tnx_50ma": 4.50, "tnx_chg_str": "+75.0 bps Today", "tnx_spiking": True
         }
 
 macro_data = fetch_macro_data()
 
+# VIX Formatting Logic (<16 Green, 16-22 Yellow, >22 Red)
+vix_val = macro_data["vix"]
+if vix_val < 16.0:
+    vix_status = f"{macro_data['vix_chg_str']} (Low Volatility 🟢)"
+elif 16.0 <= vix_val <= 22.0:
+    vix_status = f"{macro_data['vix_chg_str']} (Moderate Volatility 🟡)"
+else:
+    vix_status = f"{macro_data['vix_chg_str']} (High Volatility 🔴)"
+
+tnx_status = f"{macro_data['tnx_chg_str']} (Spiking ⚠️)" if macro_data["tnx_spiking"] else f"{macro_data['tnx_chg_str']} (Stable ✅)"
+
 # Sidebar Setup
 st.sidebar.header("Configuration & Live Macro")
-
-vix_status = f"{macro_data['vix_chg_str']} (Elevated ⚠️)" if macro_data["vix_elevated"] else f"{macro_data['vix_chg_str']} (Normal ✅)"
-tnx_status = f"{macro_data['tnx_chg_str']} (Spiking ⚠️)" if macro_data["tnx_spiking"] else f"{macro_data['tnx_chg_str']} (Stable ✅)"
 
 st.sidebar.metric("Live VIX", f"{macro_data['vix']:.2f}", delta=vix_status, delta_color="inverse")
 st.sidebar.metric("10-Year Yield (^TNX)", f"{macro_data['tnx']:.2f}%", delta=tnx_status, delta_color="inverse")
 
-default_macro_idx = 2 if (macro_data["vix_elevated"] or macro_data["tnx_spiking"] or macro_data["vix"] > 18) else 0
+default_macro_idx = 2 if (vix_val >= 22.0 or macro_data["tnx_spiking"]) else (1 if vix_val >= 16.0 else 0)
 
 macro_preset = st.sidebar.selectbox(
     "Macro Backdrop Preset",
-    ["Fed Easing / Bullish Macro", "Neutral / Transition", "Tightening / High Volatility / Bearish"],
+    ["Bullish (Fed Cutting)", "Neutral (Fed Pause)", "Bearish (Fed Raising)"],
     index=default_macro_idx
 )
 
 macro_weights = {
-    "Fed Easing / Bullish Macro": {"macro": 0.50, "timing": 0.30, "risk": 0.20},
-    "Neutral / Transition": {"macro": 0.35, "timing": 0.35, "risk": 0.30},
-    "Tightening / High Volatility / Bearish": {"macro": 0.20, "timing": 0.35, "risk": 0.45}
+    "Bullish (Fed Cutting)": {"macro": 0.50, "timing": 0.30, "risk": 0.20},
+    "Neutral (Fed Pause)": {"macro": 0.35, "timing": 0.35, "risk": 0.30},
+    "Bearish (Fed Raising)": {"macro": 0.20, "timing": 0.35, "risk": 0.45}
 }
 weights = macro_weights[macro_preset]
 
@@ -91,11 +95,7 @@ def load_etf_data(ticker_list):
             t = yf.Ticker(ticker)
             hist = t.history(period="1y")
             if not hist.empty:
-                div_series = hist["Dividends"] if "Dividends" in hist.columns else pd.Series(dtype=float)
-                data[ticker] = {
-                    "hist": hist, 
-                    "divs": div_series
-                }
+                data[ticker] = {"hist": hist}
         except Exception:
             pass
     return data
@@ -109,8 +109,6 @@ if tickers:
             continue
         
         df = etf_data[ticker]["hist"].copy()
-        divs = etf_data[ticker]["divs"]
-        
         if df.empty:
             continue
 
@@ -180,16 +178,16 @@ if tickers:
             (risk_preservation_score * weights['risk'])
         )
 
-        # --- 4. Decision Engine (Simplified BUY/HOLD/SELL Terminology) ---
-        is_risk_elevated = macro_data["vix_elevated"] or macro_data["tnx_spiking"] or macro_data["vix"] > 18.0
+        # --- 4. Decision Engine & Context Generation ---
+        is_risk_elevated = vix_val >= 22.0 or macro_data["tnx_spiking"]
 
         if is_risk_elevated and composite_score >= 60:
             signal = "HOLD 🟡"
             execution = "Pause Lump Sum (Macro Lock)"
             if pct_above_200 > 0 and rsi >= 60:
-                context = f"200D trend is BUY ({pct_above_200:+.1f}%), but Macro Circuit Breakers (^TNX/{macro_data['tnx']:.2f}%) forced a HOLD."
+                context = f"200D trend is BUY ({pct_above_200:+.1f}%), but Macro Circuit Breakers (^VIX/{vix_val:.1f} or ^TNX) forced a HOLD."
             else:
-                context = "Elevated macro volatility (^VIX or Rate Spike) downgraded signal to HOLD."
+                context = "Elevated macro volatility or interest rate shock downgraded signal to HOLD."
         elif composite_score >= 68 and rsi < 62:
             signal = "BUY 🟢"
             execution = "Full Target Position"
@@ -207,20 +205,6 @@ if tickers:
             execution = "50% Target Position"
             context = f"Balanced metrics. Macro trend ({pct_above_200:+.1f}%) lacks decisive breakout momentum."
 
-        # Trailing 12-Month Dividend Yield Calculation
-        try:
-            if not divs.empty and divs.sum() > 0:
-                one_year_ago = datetime.now() - timedelta(days=365)
-                divs_index_naive = divs.index.tz_localize(None) if divs.index.tz is not None else divs.index
-                recent_divs = divs[divs_index_naive >= one_year_ago]
-                
-                ttm_cash_sum = float(recent_divs.sum())
-                calc_yield = (ttm_cash_sum / close) * 100
-            else:
-                calc_yield = 0.0
-        except Exception:
-            calc_yield = 0.0
-
         results.append({
             "Ticker": ticker,
             "Signal": signal,
@@ -228,10 +212,7 @@ if tickers:
             "Macro Trend (200 SMA)": macro_trend_label,
             "Short-Term Momentum": timing_label,
             "Capital Preservation": cap_preservation_label,
-            "Context": context,
-            "TTM Yield": f"{calc_yield:.2f}%" if calc_yield > 0 else "N/A",
-            "Composite Score": round(composite_score, 2),
-            "Risk Score": round(risk_preservation_score, 2)
+            "Context": context
         })
 
     if results:
@@ -244,7 +225,7 @@ if tickers:
             res_df[[
                 "Ticker", "Signal", "Execution Guidance", 
                 "Macro Trend (200 SMA)", "Short-Term Momentum", 
-                "Capital Preservation", "Context", "TTM Yield"
+                "Capital Preservation", "Context"
             ]],
             column_config={
                 "Ticker": st.column_config.TextColumn("Ticker", width=70),
@@ -253,14 +234,10 @@ if tickers:
                 "Macro Trend (200 SMA)": st.column_config.TextColumn("Macro Trend (200 SMA)", width=170),
                 "Short-Term Momentum": st.column_config.TextColumn("Short-Term Momentum", width=170),
                 "Capital Preservation": st.column_config.TextColumn("Capital Preservation", width=180),
-                "Context": st.column_config.TextColumn("Context", width=380),
-                "TTM Yield": st.column_config.TextColumn("TTM Yield", width=90),
+                "Context": st.column_config.TextColumn("Context", width=420)
             },
             hide_index=True,
             use_container_width=True
         )
-
-        st.subheader("Factor Score Comparison")
-        st.bar_chart(res_df.set_index("Ticker")[["Composite Score", "Risk Score"]])
     else:
         st.warning("No valid data retrieved for specified tickers.")
