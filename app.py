@@ -86,7 +86,7 @@ ticker_input = st.sidebar.text_input("Tickers (comma separated):", value=initial
 st.query_params["tickers"] = ticker_input
 tickers = [t.strip().upper() for t in ticker_input.split(",") if t.strip()]
 
-# 3. Data Retrieval & Calculation (Serializable Cache)
+# 3. Data Retrieval & Calculation
 @st.cache_data(ttl=3600)
 def load_etf_data(ticker_list):
     data = {}
@@ -219,25 +219,67 @@ if tickers:
         res_df = pd.DataFrame(results)
 
         st.subheader("Multi-Timeframe ETF Evaluation")
+
+        # Flyover Context CSS & HTML Table Construction
+        hover_css = """
+        <style>
+        .etf-table { width: 100%; border-collapse: collapse; font-family: sans-serif; margin-top: 10px; }
+        .etf-table th { background-color: #1e222d; color: #ffffff; padding: 12px; text-align: left; font-size: 0.9rem; }
+        .etf-table td { padding: 12px; border-bottom: 1px solid #2d313e; position: relative; font-size: 0.9rem; }
+        .etf-table tr:hover { background-color: #262a36; }
         
-        # Explicit Column Layout Locking
-        st.dataframe(
-            res_df[[
-                "Ticker", "Signal", "Execution Guidance", 
-                "Macro Trend (200 SMA)", "Short-Term Momentum", 
-                "Capital Preservation", "Context"
-            ]],
-            column_config={
-                "Ticker": st.column_config.TextColumn("Ticker", width=70),
-                "Signal": st.column_config.TextColumn("Signal", width=110),
-                "Execution Guidance": st.column_config.TextColumn("Execution Guidance", width=250),
-                "Macro Trend (200 SMA)": st.column_config.TextColumn("Macro Trend (200 SMA)", width=170),
-                "Short-Term Momentum": st.column_config.TextColumn("Short-Term Momentum", width=170),
-                "Capital Preservation": st.column_config.TextColumn("Capital Preservation", width=180),
-                "Context": st.column_config.TextColumn("Context", width=420)
-            },
-            hide_index=True,
-            use_container_width=True
-        )
+        /* Flyover Tooltip Box */
+        .context-tooltip {
+            visibility: hidden;
+            width: 340px;
+            background-color: #0e1117;
+            color: #e6e8eb;
+            text-align: left;
+            border: 1px solid #4b5563;
+            border-radius: 6px;
+            padding: 10px 14px;
+            position: absolute;
+            z-index: 99;
+            right: 20px;
+            top: -10px;
+            box-shadow: 0px 8px 16px rgba(0,0,0,0.6);
+            opacity: 0;
+            transition: opacity 0.2s ease-in-out;
+            font-size: 0.85rem;
+            line-height: 1.3;
+            pointer-events: none;
+        }
+        
+        .etf-table tr:hover .context-tooltip {
+            visibility: visible;
+            opacity: 1;
+        }
+        </style>
+        """
+
+        table_html = hover_css + '<table class="etf-table"><thead><tr>'
+        headers = ["Ticker", "Signal", "Execution Guidance", "Macro Trend (200 SMA)", "Short-Term Momentum", "Capital Preservation", "Context ℹ️"]
+        for h in headers:
+            table_html += f'<th>{h}</th>'
+        table_html += '</tr></thead><tbody>'
+
+        for _, row in res_df.iterrows():
+            table_html += f'''
+            <tr>
+                <td><b>{row["Ticker"]}</b></td>
+                <td>{row["Signal"]}</td>
+                <td>{row["Execution Guidance"]}</td>
+                <td>{row["Macro Trend (200 SMA)"]}</td>
+                <td>{row["Short-Term Momentum"]}</td>
+                <td>{row["Capital Preservation"]}</td>
+                <td style="cursor: pointer; color: #9ca3af;">
+                    🔍 Hover row for details
+                    <div class="context-tooltip"><b>{row["Ticker"]} Context:</b><br/>{row["Context"]}</div>
+                </td>
+            </tr>
+            '''
+        table_html += '</tbody></table>'
+
+        st.write(table_html, unsafe_allow_html=True)
     else:
         st.warning("No valid data retrieved for specified tickers.")
