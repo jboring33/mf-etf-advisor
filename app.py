@@ -81,7 +81,7 @@ ticker_input = st.sidebar.text_input("Tickers (comma separated):", value=initial
 st.query_params["tickers"] = ticker_input
 tickers = [t.strip().upper() for t in ticker_input.split(",") if t.strip()]
 
-# 3. Data Retrieval & Calculation
+# 3. Data Retrieval & Calculation (Fixed for Unserializable Return Value Error)
 @st.cache_data(ttl=3600)
 def load_etf_data(ticker_list):
     data = {}
@@ -89,7 +89,9 @@ def load_etf_data(ticker_list):
         try:
             t = yf.Ticker(ticker)
             hist = t.history(period="1y")
-            data[ticker] = {"hist": hist, "ticker_obj": t}
+            divs = t.dividends
+            if not hist.empty:
+                data[ticker] = {"hist": hist, "divs": divs}
         except Exception:
             pass
     return data
@@ -103,7 +105,7 @@ if tickers:
             continue
         
         df = etf_data[ticker]["hist"].copy()
-        t_obj = etf_data[ticker]["ticker_obj"]
+        divs = etf_data[ticker]["divs"]
         
         if df.empty:
             continue
@@ -183,7 +185,6 @@ if tickers:
 
         # Trailing 12-Month Dividend Yield Calculation
         try:
-            divs = t_obj.dividends
             if not divs.empty:
                 ttm_divs = float(divs.tail(12).sum())
                 calc_yield = (ttm_divs / close) * 100
