@@ -2,6 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Multi-Timeframe ETF Engine", layout="wide")
 
@@ -81,7 +82,7 @@ ticker_input = st.sidebar.text_input("Tickers (comma separated):", value=initial
 st.query_params["tickers"] = ticker_input
 tickers = [t.strip().upper() for t in ticker_input.split(",") if t.strip()]
 
-# 3. Data Retrieval & Calculation (Fixed for Unserializable Return Value Error)
+# 3. Data Retrieval & Calculation (Serializable Cache)
 @st.cache_data(ttl=3600)
 def load_etf_data(ticker_list):
     data = {}
@@ -90,8 +91,13 @@ def load_etf_data(ticker_list):
             t = yf.Ticker(ticker)
             hist = t.history(period="1y")
             divs = t.dividends
+            info_yield = t.info.get("dividendYield", None)
             if not hist.empty:
-                data[ticker] = {"hist": hist, "divs": divs}
+                data[ticker] = {
+                    "hist": hist, 
+                    "divs": divs, 
+                    "info_yield": info_yield
+                }
         except Exception:
             pass
     return data
@@ -106,6 +112,7 @@ if tickers:
         
         df = etf_data[ticker]["hist"].copy()
         divs = etf_data[ticker]["divs"]
+        info_yield = etf_data[ticker]["info_yield"]
         
         if df.empty:
             continue
@@ -117,7 +124,7 @@ if tickers:
         pct_above_200 = ((close - sma_200) / sma_200) * 100
         macro_score = float(np.clip(50 + (pct_above_200 * 5), 0, 100))
         
-        # --- 2. Short-Term Technical Timing (Wilder's RSI & Stochastic %K) ---
+        # --- 2. Technical Timing (Wilder's RSI & Stochastic %K) ---
         delta = df['Close'].diff()
         gain = delta.clip(lower=0)
         loss = -delta.clip(upper=0)
@@ -183,15 +190,19 @@ if tickers:
             signal = "HOLD / NEUTRAL 🟡"
             execution = "50% Target Position"
 
-        # Trailing 12-Month Dividend Yield Calculation
-        try:
-            if not divs.empty:
-                ttm_divs = float(divs.tail(12).sum())
-                calc_yield = (ttm_divs / close) * 100
-            else:
-                calc_yield = 0.0
-        except Exception:
-            calc_yield = 0.0
+        # Trailing 12-Month Dividend Yield Calculation Fix
+        calc_yield = 0.0
+        if info_yield is not None and info_yield > 0:
+            # yfinance returns decimal (e.g. 0.034 for 3.4%) or already scaled % depending on ticker type
+            calc_yield = info_yield * 100 if info_yield < 1.0 else info_yield
+        elif not divs.empty:
+            # Fallback: Sum dividend cash distributions within exactly the last 365 days
+            one_year_ago = datetime.now() - timedelta(days=365)
+            # Remove timezone awareness for proper datetime comparison
+            divs_index_naive = divs.index.tz_localize(None) if divs.index.tz is not None else divs.index
+            recent_divs = divs[divs_index_naive >= one_year_ago]
+            if not recent_divs.empty:
+                calc_yield = (float(recent_divs.sum()) / close) * 100
 
         # Indicator Color Formatting
         rsi_formatted = f"{rsi:.2f} 🔴" if rsi >= 70 else (f"{rsi:.2f} 🟢" if rsi <= 35 else f"{rsi:.2f} 🟡")
@@ -207,7 +218,7 @@ if tickers:
             "14D Stoch %K": stoch_formatted,
             "OBV Trend": obv_trend,
             "Capital Preservation": round(risk_preservation_score, 2),
-            "Yield": f"{calc_yield:.2f}%" if calc_yield > 0 else "N/A"
+            "TTM Yield": f"{calc_yield:.2f}%" if calc_yield > 0 else "N/A"
         })
 
     if results:
@@ -215,19 +226,20 @@ if tickers:
 
         st.subheader("Multi-Timeframe ETF Evaluation")
         
+        # Explicit Column Config preventing truncation and ensuring high width allocation for text columns
         st.dataframe(
             res_df,
             column_config={
-                "Ticker": st.column_config.TextColumn("Ticker", width="small"),
-                "Signal": st.column_config.TextColumn("Signal", width="medium"),
-                "Execution Guidance": st.column_config.TextColumn("Execution Guidance", width="large"),
-                "Composite Score": st.column_config.NumberColumn("Composite Score", format="%.2f"),
-                "200D Trend": st.column_config.TextColumn("200D Trend"),
-                "14D RSI": st.column_config.TextColumn("14D RSI"),
-                "14D Stoch %K": st.column_config.TextColumn("14D Stoch %K"),
-                "OBV Trend": st.column_config.TextColumn("OBV Trend"),
-                "Capital Preservation": st.column_config.NumberColumn("Capital Preservation", format="%.2f"),
-                "Yield": st.column_config.TextColumn("TTM Yield"),
+                "Ticker": st.column_config.TextColumn("Ticker", width=70),
+                "Signal": st.column_config.TextColumn("Signal", width=280),
+                "Execution Guidance": st.column_config.TextColumn("Execution Guidance", width=310),
+                "Composite Score": st.column_config.NumberColumn("Composite Score", format="%.2f", width=110),
+                "200D Trend": st.column_config.TextColumn("200D Trend", width=100),
+                "14D RSI": st.column_config.TextColumn("14D RSI", width=100),
+                "14D Stoch %K": st.column_config.TextColumn("14D Stoch %K", width=110),
+                "OBV Trend": st.column_config.TextColumn("OBV Trend", width=110),
+                "Capital Preservation": st.column_config.NumberColumn("Capital Preservation", format="%.2f", width=140),
+                "TTM Yield": st.column_config.TextColumn("TTM Yield", width=100),
             },
             hide_index=True,
             use_container_width=True
