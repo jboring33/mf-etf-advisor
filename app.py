@@ -21,8 +21,7 @@ st.title("🛡️ Institutional-Grade ETF Decision Engine")
 @st.cache_data(ttl=1800)
 def fetch_macro_data():
     try:
-        tickers = ["^VIX", "^TNX"]
-        macro_df = yf.download(tickers, period="3m", progress=False)["Close"]
+        macro_df = yf.download(["^VIX", "^TNX"], period="3m", progress=False)["Close"]
         
         vix_current = float(macro_df["^VIX"].iloc[-1])
         vix_50ma = float(macro_df["^VIX"].rolling(50).mean().iloc[-1])
@@ -35,7 +34,7 @@ def fetch_macro_data():
             "tnx": tnx_current
         }
     except Exception:
-        return {"vix": 18.0, "vix_50ma": 16.0, "vix_elevated": False, "tnx": 4.0}
+        return {"vix": 18.0, "vix_50ma": 16.0, "vix_elevated": True, "tnx": 4.0}
 
 macro_data = fetch_macro_data()
 
@@ -46,8 +45,8 @@ vix_status = "ELEVATED ⚠️" if macro_data["vix_elevated"] else "NORMAL ✅"
 st.sidebar.metric("Live VIX", f"{macro_data['vix']:.2f}", delta=vix_status, delta_color="inverse")
 st.sidebar.metric("10-Year Yield (^TNX)", f"{macro_data['tnx']:.2f}%")
 
-# Auto-detect default macro regime based on live VIX & Yields
-default_macro_idx = 2 if macro_data["vix_elevated"] or macro_data["vix"] > 20 else 0
+# Auto-detect default macro regime based on live VIX
+default_macro_idx = 2 if macro_data["vix_elevated"] or macro_data["vix"] > 18 else 0
 
 macro_preset = st.sidebar.selectbox(
     "Macro Backdrop Preset",
@@ -68,7 +67,7 @@ ticker_input = st.sidebar.text_input("Tickers (comma separated):", value=initial
 st.query_params["tickers"] = ticker_input
 tickers = [t.strip().upper() for t in ticker_input.split(",") if t.strip()]
 
-# 3. Robust Data Retrieval & Calculation
+# 3. Data Retrieval & Calculation
 @st.cache_data(ttl=3600)
 def load_etf_data(ticker_list):
     data = {}
@@ -106,23 +105,20 @@ if tickers:
         gain = delta.clip(lower=0)
         loss = -delta.clip(upper=0)
         
-        # Exponential Moving Average for Wilder's Smoothing
         avg_gain = gain.ewm(com=13, adjust=False).mean()
         avg_loss = loss.ewm(com=13, adjust=False).mean()
         
         rs = avg_gain / avg_loss.replace(0, np.nan)
         rsi = float((100 - (100 / (1 + rs))).iloc[-1])
         
-        # 14-Day Stochastic %K
         low_14 = df['Low'].rolling(14).min()
         high_14 = df['High'].rolling(14).max()
         stoch_k = float(((df['Close'] - low_14) / (high_14 - low_14) * 100).iloc[-1]) if len(df) >= 14 else 50.0
 
-        # Timing Score Logic
         if rsi >= 70:
-            timing_score = 25.0   # Overbought peak: Avoid buying
+            timing_score = 25.0
         elif rsi <= 35:
-            timing_score = 90.0   # Oversold dip: Prime entry opportunity
+            timing_score = 90.0
         else:
             timing_score = float(np.clip(100 - abs(rsi - 45) * 2.2, 35, 80))
 
@@ -134,7 +130,6 @@ if tickers:
         drawdown = (df['Close'] - roll_max) / roll_max
         max_dd = float(drawdown.min()) if not drawdown.empty else 0.0
         
-        # On-Balance Volume (OBV) Calculation
         obv = (np.sign(df['Close'].diff()) * df['Volume']).fillna(0).cumsum()
         obv_ma20 = obv.rolling(20).mean().iloc[-1]
         obv_trend = "Bullish" if obv.iloc[-1] > obv_ma20 else "Bearish"
@@ -152,13 +147,18 @@ if tickers:
             (risk_preservation_score * weights['risk'])
         )
 
-        # Multi-Factor Signal Decision Engine
-        if composite_score >= 68 and rsi < 62:
+        # --- 4. Decision Engine with Event / Volatility Circuit Breaker ---
+        is_volatility_elevated = macro_data["vix_elevated"] or macro_data["vix"] > 18.0
+
+        if is_volatility_elevated and composite_score >= 60:
+            signal = "HOLD / DCA ONLY (Event Lock)"
+            execution = "Pause Lump Sum — Pre-Fed / High Vol Window"
+        elif composite_score >= 68 and rsi < 62:
             signal = "BUY (Oversold Dip)"
             execution = "Full Target Position"
         elif composite_score >= 60 and rsi >= 62:
             signal = "HOLD / DCA ONLY"
-            execution = "Pause Lump Sum (Short-Term High)"
+            execution = "Pause Lump Sum (Short-Term Peak)"
         elif composite_score <= 45:
             signal = "SELL / CAPITAL PRESERVE"
             execution = "0% Target Allocation"
