@@ -220,66 +220,46 @@ if tickers:
 
         st.subheader("Multi-Timeframe ETF Evaluation")
 
-        # Flyover Context CSS & HTML Table Construction
-        hover_css = """
-        <style>
-        .etf-table { width: 100%; border-collapse: collapse; font-family: sans-serif; margin-top: 10px; }
-        .etf-table th { background-color: #1e222d; color: #ffffff; padding: 12px; text-align: left; font-size: 0.9rem; }
-        .etf-table td { padding: 12px; border-bottom: 1px solid #2d313e; position: relative; font-size: 0.9rem; }
-        .etf-table tr:hover { background-color: #262a36; }
-        
-        /* Flyover Tooltip Box */
-        .context-tooltip {
-            visibility: hidden;
-            width: 340px;
-            background-color: #0e1117;
-            color: #e6e8eb;
-            text-align: left;
-            border: 1px solid #4b5563;
-            border-radius: 6px;
-            padding: 10px 14px;
-            position: absolute;
-            z-index: 99;
-            right: 20px;
-            top: -10px;
-            box-shadow: 0px 8px 16px rgba(0,0,0,0.6);
-            opacity: 0;
-            transition: opacity 0.2s ease-in-out;
-            font-size: 0.85rem;
-            line-height: 1.3;
-            pointer-events: none;
-        }
-        
-        .etf-table tr:hover .context-tooltip {
-            visibility: visible;
-            opacity: 1;
-        }
-        </style>
-        """
+        # Custom CSS for Flyover Tooltip
+        hover_css = (
+            "<style>"
+            ".etf-table { width: 100%; border-collapse: collapse; font-family: sans-serif; margin-top: 10px; }"
+            ".etf-table th { background-color: #1e222d; color: #ffffff; padding: 12px; text-align: left; font-size: 0.9rem; }"
+            ".etf-table td { padding: 12px; border-bottom: 1px solid #2d313e; position: relative; font-size: 0.9rem; }"
+            ".etf-table tr:hover { background-color: #262a36; }"
+            ".context-tooltip {"
+            "  visibility: hidden; width: 340px; background-color: #0e1117; color: #e6e8eb;"
+            "  text-align: left; border: 1px solid #4b5563; border-radius: 6px; padding: 10px 14px;"
+            "  position: absolute; z-index: 99; right: 20px; top: -10px;"
+            "  box-shadow: 0px 8px 16px rgba(0,0,0,0.6); opacity: 0; transition: opacity 0.2s ease-in-out;"
+            "  font-size: 0.85rem; line-height: 1.3; pointer-events: none;"
+            "}"
+            ".etf-table tr:hover .context-tooltip { visibility: visible; opacity: 1; }"
+            "</style>"
+        )
 
-        table_html = hover_css + '<table class="etf-table"><thead><tr>'
         headers = ["Ticker", "Signal", "Execution Guidance", "Macro Trend (200 SMA)", "Short-Term Momentum", "Capital Preservation", "Context ℹ️"]
-        for h in headers:
-            table_html += f'<th>{h}</th>'
-        table_html += '</tr></thead><tbody>'
-
+        header_html = "".join([f"<th>{h}</th>" for h in headers])
+        
+        rows_html = ""
         for _, row in res_df.iterrows():
-            table_html += f'''
-            <tr>
-                <td><b>{row["Ticker"]}</b></td>
-                <td>{row["Signal"]}</td>
-                <td>{row["Execution Guidance"]}</td>
-                <td>{row["Macro Trend (200 SMA)"]}</td>
-                <td>{row["Short-Term Momentum"]}</td>
-                <td>{row["Capital Preservation"]}</td>
-                <td style="cursor: pointer; color: #9ca3af;">
-                    🔍 Hover row for details
-                    <div class="context-tooltip"><b>{row["Ticker"]} Context:</b><br/>{row["Context"]}</div>
-                </td>
-            </tr>
-            '''
-        table_html += '</tbody></table>'
+            rows_html += (
+                f"<tr>"
+                f"<td><b>{row['Ticker']}</b></td>"
+                f"<td>{row['Signal']}</td>"
+                f"<td>{row['Execution Guidance']}</td>"
+                f"<td>{row['Macro Trend (200 SMA)']}</td>"
+                f"<td>{row['Short-Term Momentum']}</td>"
+                f"<td>{row['Capital Preservation']}</td>"
+                f"<td style='cursor: pointer; color: #9ca3af;'>"
+                f"🔍 Hover row for details"
+                f"<div class='context-tooltip'><b>{row['Ticker']} Context:</b><br/>{row['Context']}</div>"
+                f"</td>"
+                f"</tr>"
+            )
 
-        st.write(table_html, unsafe_allow_html=True)
+        full_table_html = f"{hover_css}<table class='etf-table'><thead><tr>{header_html}</tr></thead><tbody>{rows_html}</tbody></table>"
+
+        st.markdown(full_table_html, unsafe_allow_html=True)
     else:
         st.warning("No valid data retrieved for specified tickers.")
