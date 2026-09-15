@@ -116,12 +116,14 @@ if tickers:
 
         close = float(df['Close'].iloc[-1])
         
-        # --- 1. Macro Trend (200-Day SMA & Distance) ---
+        # --- 1. Macro Trend (200-Day SMA) ---
         sma_200 = float(df['Close'].rolling(200).mean().iloc[-1]) if len(df) >= 200 else close
         pct_above_200 = ((close - sma_200) / sma_200) * 100
         macro_score = float(np.clip(50 + (pct_above_200 * 5), 0, 100))
         
-        # --- 2. Technical Timing (Wilder's RSI & Stochastic %K) ---
+        macro_trend_label = f"BUY 🟢 ({pct_above_200:+.1f}%)" if pct_above_200 >= 0 else f"SELL 🔴 ({pct_above_200:+.1f}%)"
+
+        # --- 2. Short-Term Technical Timing ---
         delta = df['Close'].diff()
         gain = delta.clip(lower=0)
         loss = -delta.clip(upper=0)
@@ -136,11 +138,14 @@ if tickers:
         high_14 = df['High'].rolling(14).max()
         stoch_k = float(((df['Close'] - low_14) / (high_14 - low_14) * 100).iloc[-1]) if len(df) >= 14 else 50.0
 
-        if rsi >= 70:
+        if rsi >= 70 or stoch_k >= 80:
+            timing_label = "SELL 🔴"
             timing_score = 25.0
-        elif rsi <= 35:
+        elif rsi <= 38 or stoch_k <= 20:
+            timing_label = "BUY 🟢"
             timing_score = 90.0
         else:
+            timing_label = "HOLD 🟡"
             timing_score = float(np.clip(100 - abs(rsi - 45) * 2.2, 35, 80))
 
         # --- 3. Capital Preservation & OBV Trend ---
@@ -153,13 +158,20 @@ if tickers:
         
         obv = (np.sign(df['Close'].diff()) * df['Volume']).fillna(0).cumsum()
         obv_ma20 = obv.rolling(20).mean().iloc[-1]
-        obv_trend = "Bullish 🟢" if obv.iloc[-1] > obv_ma20 else "Bearish 🔴"
+        obv_is_bullish = obv.iloc[-1] > obv_ma20
         
         vol_score = float(np.clip(100 - (ann_vol * 220), 0, 100))
         dd_score = float(np.clip(100 + (max_dd * 220), 0, 100))
-        obv_score = 85.0 if "Bullish" in obv_trend else 35.0
+        obv_score = 85.0 if obv_is_bullish else 35.0
         
         risk_preservation_score = (vol_score * 0.4) + (dd_score * 0.4) + (obv_score * 0.2)
+
+        if risk_preservation_score >= 75 and obv_is_bullish:
+            cap_preservation_label = "BUY 🟢"
+        elif risk_preservation_score >= 50:
+            cap_preservation_label = "HOLD 🟡"
+        else:
+            cap_preservation_label = "SELL 🔴"
 
         # Composite Score Calculation
         composite_score = (
@@ -168,26 +180,34 @@ if tickers:
             (risk_preservation_score * weights['risk'])
         )
 
-        # --- 4. Decision Engine with Event / Volatility Circuit Breaker ---
+        # --- 4. Decision Engine (Simplified BUY/HOLD/SELL Terminology) ---
         is_risk_elevated = macro_data["vix_elevated"] or macro_data["tnx_spiking"] or macro_data["vix"] > 18.0
 
         if is_risk_elevated and composite_score >= 60:
-            signal = "HOLD / DCA ONLY (Event Lock) 🟡"
-            execution = "Pause Lump Sum — Pre-Fed / Volatility Window"
+            signal = "HOLD 🟡"
+            execution = "Pause Lump Sum (Macro Lock)"
+            if pct_above_200 > 0 and rsi >= 60:
+                context = f"200D trend is BUY ({pct_above_200:+.1f}%), but Macro Circuit Breakers (^TNX/{macro_data['tnx']:.2f}%) forced a HOLD."
+            else:
+                context = "Elevated macro volatility (^VIX or Rate Spike) downgraded signal to HOLD."
         elif composite_score >= 68 and rsi < 62:
-            signal = "BUY (Oversold Dip) 🟢"
+            signal = "BUY 🟢"
             execution = "Full Target Position"
+            context = f"Strong 200D trend ({pct_above_200:+.1f}%) paired with favorable RSI ({rsi:.1f}). Prime entry window."
         elif composite_score >= 60 and rsi >= 62:
-            signal = "HOLD / DCA ONLY 🟡"
+            signal = "HOLD 🟡"
             execution = "Pause Lump Sum (Short-Term Peak)"
+            context = f"200D trend is BUY ({pct_above_200:+.1f}%), but short-term momentum is overbought (RSI {rsi:.1f})."
         elif composite_score <= 45:
-            signal = "SELL / CAPITAL PRESERVE 🔴"
+            signal = "SELL 🔴"
             execution = "0% Target Allocation"
+            context = f"Macro trend breakdown ({pct_above_200:+.1f}% vs 200D) with declining volume distribution (OBV SELL)."
         else:
-            signal = "HOLD / NEUTRAL 🟡"
+            signal = "HOLD 🟡"
             execution = "50% Target Position"
+            context = f"Balanced metrics. Macro trend ({pct_above_200:+.1f}%) lacks decisive breakout momentum."
 
-        # Trailing 12-Month Dividend Yield Calculation (100% History-Based)
+        # Trailing 12-Month Dividend Yield Calculation
         try:
             if not divs.empty and divs.sum() > 0:
                 one_year_ago = datetime.now() - timedelta(days=365)
@@ -201,21 +221,17 @@ if tickers:
         except Exception:
             calc_yield = 0.0
 
-        # Indicator Color Formatting
-        rsi_formatted = f"{rsi:.2f} 🔴" if rsi >= 70 else (f"{rsi:.2f} 🟢" if rsi <= 35 else f"{rsi:.2f} 🟡")
-        stoch_formatted = f"{stoch_k:.2f} 🔴" if stoch_k >= 80 else (f"{stoch_k:.2f} 🟢" if stoch_k <= 20 else f"{stoch_k:.2f} 🟡")
-
         results.append({
             "Ticker": ticker,
             "Signal": signal,
             "Execution Guidance": execution,
+            "Macro Trend (200 SMA)": macro_trend_label,
+            "Short-Term Momentum": timing_label,
+            "Capital Preservation": cap_preservation_label,
+            "Context": context,
+            "TTM Yield": f"{calc_yield:.2f}%" if calc_yield > 0 else "N/A",
             "Composite Score": round(composite_score, 2),
-            "200D Trend": f"{pct_above_200:+.1f}%",
-            "14D RSI": rsi_formatted,
-            "14D Stoch %K": stoch_formatted,
-            "OBV Trend": obv_trend,
-            "Capital Preservation": round(risk_preservation_score, 2),
-            "TTM Yield": f"{calc_yield:.2f}%" if calc_yield > 0 else "N/A"
+            "Risk Score": round(risk_preservation_score, 2)
         })
 
     if results:
@@ -223,26 +239,28 @@ if tickers:
 
         st.subheader("Multi-Timeframe ETF Evaluation")
         
-        # Explicit Column Config preventing truncation and locking wider allocations for text columns
+        # Explicit Column Layout Locking
         st.dataframe(
-            res_df,
+            res_df[[
+                "Ticker", "Signal", "Execution Guidance", 
+                "Macro Trend (200 SMA)", "Short-Term Momentum", 
+                "Capital Preservation", "Context", "TTM Yield"
+            ]],
             column_config={
                 "Ticker": st.column_config.TextColumn("Ticker", width=70),
-                "Signal": st.column_config.TextColumn("Signal", width=280),
-                "Execution Guidance": st.column_config.TextColumn("Execution Guidance", width=310),
-                "Composite Score": st.column_config.NumberColumn("Composite Score", format="%.2f", width=110),
-                "200D Trend": st.column_config.TextColumn("200D Trend", width=100),
-                "14D RSI": st.column_config.TextColumn("14D RSI", width=100),
-                "14D Stoch %K": st.column_config.TextColumn("14D Stoch %K", width=110),
-                "OBV Trend": st.column_config.TextColumn("OBV Trend", width=110),
-                "Capital Preservation": st.column_config.NumberColumn("Capital Preservation", format="%.2f", width=140),
-                "TTM Yield": st.column_config.TextColumn("TTM Yield", width=100),
+                "Signal": st.column_config.TextColumn("Signal", width=110),
+                "Execution Guidance": st.column_config.TextColumn("Execution Guidance", width=250),
+                "Macro Trend (200 SMA)": st.column_config.TextColumn("Macro Trend (200 SMA)", width=170),
+                "Short-Term Momentum": st.column_config.TextColumn("Short-Term Momentum", width=170),
+                "Capital Preservation": st.column_config.TextColumn("Capital Preservation", width=180),
+                "Context": st.column_config.TextColumn("Context", width=380),
+                "TTM Yield": st.column_config.TextColumn("TTM Yield", width=90),
             },
             hide_index=True,
             use_container_width=True
         )
 
         st.subheader("Factor Score Comparison")
-        st.bar_chart(res_df.set_index("Ticker")[["Composite Score", "Capital Preservation"]])
+        st.bar_chart(res_df.set_index("Ticker")[["Composite Score", "Risk Score"]])
     else:
         st.warning("No valid data retrieved for specified tickers.")
