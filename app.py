@@ -90,13 +90,11 @@ def load_etf_data(ticker_list):
         try:
             t = yf.Ticker(ticker)
             hist = t.history(period="1y")
-            divs = t.dividends
-            info_yield = t.info.get("dividendYield", None)
             if not hist.empty:
+                div_series = hist["Dividends"] if "Dividends" in hist.columns else pd.Series(dtype=float)
                 data[ticker] = {
                     "hist": hist, 
-                    "divs": divs, 
-                    "info_yield": info_yield
+                    "divs": div_series
                 }
         except Exception:
             pass
@@ -112,7 +110,6 @@ if tickers:
         
         df = etf_data[ticker]["hist"].copy()
         divs = etf_data[ticker]["divs"]
-        info_yield = etf_data[ticker]["info_yield"]
         
         if df.empty:
             continue
@@ -190,19 +187,19 @@ if tickers:
             signal = "HOLD / NEUTRAL 🟡"
             execution = "50% Target Position"
 
-        # Trailing 12-Month Dividend Yield Calculation Fix
-        calc_yield = 0.0
-        if info_yield is not None and info_yield > 0:
-            # yfinance returns decimal (e.g. 0.034 for 3.4%) or already scaled % depending on ticker type
-            calc_yield = info_yield * 100 if info_yield < 1.0 else info_yield
-        elif not divs.empty:
-            # Fallback: Sum dividend cash distributions within exactly the last 365 days
-            one_year_ago = datetime.now() - timedelta(days=365)
-            # Remove timezone awareness for proper datetime comparison
-            divs_index_naive = divs.index.tz_localize(None) if divs.index.tz is not None else divs.index
-            recent_divs = divs[divs_index_naive >= one_year_ago]
-            if not recent_divs.empty:
-                calc_yield = (float(recent_divs.sum()) / close) * 100
+        # Trailing 12-Month Dividend Yield Calculation (100% History-Based)
+        try:
+            if not divs.empty and divs.sum() > 0:
+                one_year_ago = datetime.now() - timedelta(days=365)
+                divs_index_naive = divs.index.tz_localize(None) if divs.index.tz is not None else divs.index
+                recent_divs = divs[divs_index_naive >= one_year_ago]
+                
+                ttm_cash_sum = float(recent_divs.sum())
+                calc_yield = (ttm_cash_sum / close) * 100
+            else:
+                calc_yield = 0.0
+        except Exception:
+            calc_yield = 0.0
 
         # Indicator Color Formatting
         rsi_formatted = f"{rsi:.2f} 🔴" if rsi >= 70 else (f"{rsi:.2f} 🟢" if rsi <= 35 else f"{rsi:.2f} 🟡")
@@ -226,7 +223,7 @@ if tickers:
 
         st.subheader("Multi-Timeframe ETF Evaluation")
         
-        # Explicit Column Config preventing truncation and ensuring high width allocation for text columns
+        # Explicit Column Config preventing truncation and locking wider allocations for text columns
         st.dataframe(
             res_df,
             column_config={
